@@ -117,12 +117,23 @@ def get_course_members(soup: BeautifulSoup, course_id: str) -> list[Member]:
         ]
     """
 
-    # assumed ordering
-    # name, email, role, sections?, submissions, edit, remove
-    # if course has sections, section column is added before number of submissions column
-    headers = soup.find("table", class_="js-rosterTable").find_all("th")
-    has_sections = any(h.text.startswith("Sections") for h in headers)
-    num_submissions_column = 4 if has_sections else 3
+    # Resolve column indexes by header text rather than hard-coded positions —
+    # Gradescope has added and reordered columns over time (e.g. two name
+    # columns for first/last swap, two "Canvas" columns for LMS integration),
+    # and positional indexes drift. Match on header prefix since some headers
+    # include tooltip text after the label.
+    roster_table = soup.find("table", class_="js-rosterTable")
+    headers = roster_table.find_all("th")
+    header_texts = [h.text.strip() for h in headers]
+
+    def find_col(*prefixes: str) -> int | None:
+        for i, txt in enumerate(header_texts):
+            if any(txt.startswith(p) for p in prefixes):
+                return i
+        return None
+
+    submissions_col = find_col("Submissions")
+    has_sections = find_col("Sections") is not None
 
     member_list = []
 
@@ -168,8 +179,13 @@ def get_course_members(soup: BeautifulSoup, course_id: str) -> list[Member]:
             data_url: str = rosterName_button.get("data-url", None)
             user_id = data_url.split("user_id=")[-1]
 
-        # fetch number of submissions from table cell
-        num_submissions = int(cells[num_submissions_column].text)
+        # fetch number of submissions from table cell (by header lookup). Empty
+        # cell means zero submissions for that student.
+        if submissions_col is not None and submissions_col < len(cells):
+            raw = cells[submissions_col].text.strip()
+            num_submissions = int(raw) if raw.isdigit() else 0
+        else:
+            num_submissions = 0
 
         # create Member object with all relevant info
         member_list.append(
